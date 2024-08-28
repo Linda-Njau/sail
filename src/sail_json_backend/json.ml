@@ -84,6 +84,8 @@ let inputs = Hashtbl.create 997
 let encodings = Hashtbl.create 997
 let assembly = Hashtbl.create 997
 let assembly_clean = Hashtbl.create 997
+let pseudoinstructions = Hashtbl.create 997
+let base_instructions = Hashtbl.create 997
 let executes = Hashtbl.create 997
 let functions = Hashtbl.create 997
 let op_functions = Hashtbl.create 997
@@ -436,12 +438,35 @@ let parse_funcl fcl =
           let source_code = extract_source_code (Ast_util.exp_loc e) in
           Hashtbl.add functions id source_code
       | Pat_exp (P_aux (P_app (i, pl), _), e) | Pat_when (P_aux (P_app (i, pl), _), e, _) ->
-          debug_print ("FCL_funcl execute " ^ string_of_id i);
           let source_code = extract_source_code (Ast_util.exp_loc e) in
-          Hashtbl.add executes (string_of_id i) source_code
+          if id = "pseudo_of" then begin
+            debug_print ("FCL funcl pseudoinstruction " ^ string_of_id i);
+            Hashtbl.add pseudoinstructions (string_of_id i) source_code;
+          end else if id = "execute" then begin
+            debug_print ("FCL_funcl execute " ^ string_of_id i);
+                debug_print ("FCL_funcl execute " ^ string_of_id i);  
+            Hashtbl.add executes (string_of_id i) source_code;
+          end
       | _ -> ()
     end
   | _ -> debug_print "FCL_funcl other"
+
+let extract_base_instructions k =
+  match Hashtbl.find_opt pseudoinstructions k with
+  | Some base_instructions -> 
+    let rec extract_from_parts parts acc =
+      match parts with
+      | [] -> List.rev acc
+      | part :: rest ->
+        if String.contains part ' ' then
+          let base_instruction = String.split_on_char ' ' part |> List.hd in
+          extract_from_parts rest (base_instruction :: acc)
+        else
+          extract_from_parts rest acc
+      in
+      let extracted_instructions = extract_from_parts (base_instructions) [] in
+      Hashtbl.add base_instructions k extracted_instructions
+  | None -> Printf.printf "Key %s not found in pseudoinstructions\n" k
 
 let json_of_key_operand key op t = "\n{\n" ^ "  \"name\": \"" ^ op ^ "\", \"type\": \"" ^ t ^ "\"\n" ^ "}"
 
@@ -693,6 +718,13 @@ let json_of_format k =
   in
   "\"" ^ format ^ "\""
 
+let json_of_base_instruction k =
+let base_instructions =
+  match Hashtbl.find base_instructions k with
+  | None -> []
+  | Some v -> String.escaped v in
+  "\"" ^ base_instructions ^ "\""
+
 let json_of_extensions k = match Hashtbl.find_opt extensions k with None -> "" | Some l -> String.concat "," l
 
 let json_of_instruction k v =
@@ -704,6 +736,15 @@ let json_of_instruction k v =
   ^ "  \"format\": " ^ json_of_format k ^ ",\n" ^ "  \"fields\": [ " ^ json_of_fields k ^ " ],\n"
   ^ "  \"extensions\": [ " ^ json_of_extensions k ^ " ],\n" ^ "  \"function\": " ^ json_of_function k ^ ",\n"
   ^ "  \"description\": " ^ json_of_description k ^ "\n" ^ "}"
+
+  let json_of_pseudoinstruction k v =
+ "{\n" ^ "  \"mnemonic\": "
+  ^ json_of_mnemonic (List.hd v)
+  ^ ",\n" ^ "  \"name\": "
+  ^ json_of_name k (List.hd v)
+  ^ ",\n" ^ "  \"operands\": [ " ^ json_of_operands k ^ " ],\n" ^ "  \"syntax\": " ^ "\"" ^ json_of_syntax k ^ "\",\n"
+  ^ "  \"format\": " ^ json_of_format k ^ ",\n" ^ "  \"fields\": [ " ^ json_of_fields k ^ " ],\n" ^ "  \"function\": " ^ json_of_base_instruction k ^ ",\n"
+  ^ "  \"description\": " ^ json_of_description k ^ "\n" ^ "}" 
 
 let rec parse_typ name t =
   match t with
@@ -797,6 +838,8 @@ let defs { defs; _ } =
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) assembly;
   debug_print "EXECUTES";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ v)) executes;
+  debug_print "PSEUDOINSTRUCTIONS";
+  Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ v)) pseudoinstructions;
   debug_print "FUNCTIONS";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ v)) functions;
   debug_print "OP_FUNCTIONS";
@@ -827,11 +870,21 @@ let defs { defs; _ } =
 
   (* Join keys and mnemonics, then sort by mnemonic, then use the keys in that order to emit instructions *)
   let key_mnemonic_sorted =
-    let key_mnemonic_map = Hashtbl.fold (fun k v init -> [k; List.hd v] :: init) assembly_clean [] in
+    let key_mnemonic_map = Hashtbl.fold (fun k v init -> if Hashtbl.mem pseudoinstructions k then init else [k; List.hd v] :: init) assembly_clean [] in
     List.sort (fun l r -> String.compare (List.hd (List.tl l)) (List.hd (List.tl r))) key_mnemonic_map
   in
   print_endline
     (String.concat ",\n" (List.map (fun a -> json_of_instruction (List.hd a) (List.tl a)) key_mnemonic_sorted));
+
+  print_endline "  ],";
+  print_endline "  \"pseudoinstructions\": [";
+
+  let pseudoinstruction_sorted =
+    let key_mnemonic_map = Hashtbl.fold (fun k v init -> if Hashtbl.mem pseudoinstructions k then [k; List.hd v] :: init else init) assembly_clean [] in
+    List.sort (fun l r -> String.compare (List.hd (List.tl l)) (List.hd (List.tl r))) key_mnemonic_map
+  in
+  print_endline
+    (String.concat ",\n" (List.map (fun a -> json_of_pseudoinstruction (List.hd a) (List.tl a)) pseudoinstruction_sorted));
 
   print_endline "  ],";
   print_endline "  \"registers\": ";
