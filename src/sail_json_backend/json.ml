@@ -431,6 +431,8 @@ let extract_source_code l =
   | Some (p1, p2) -> Reporting.loc_range_to_src p1 p2
   | None -> "Error - couldn't locate func"
 
+
+             
 let parse_funcl fcl =
   match fcl with
   | FCL_aux (FCL_funcl (Id_aux (Id id, _), Pat_aux (pat, _)), _) -> begin
@@ -447,36 +449,32 @@ let parse_funcl fcl =
               match e with
               | E_aux (E_list exp_list, _) ->
                   debug_print ("Exp el: " ^ String.concat ", " (List.map string_of_exp exp_list));
-                  let base_instructions =
-                    List.map
-                      (fun exp ->
-                        match exp with
-                        | E_aux (E_app (id, el), _) ->
-                            let args_list = ref [] in
-                            debug_print
-                              ("id: " ^ string_of_id id ^ "; Arg: " ^ String.concat ", " (List.map string_of_exp el));
-                            List.iter
-                              (fun inner_exp ->
-                                match inner_exp with
-                                | E_aux (E_app (id_inner, el_inner), _) ->
-                                    let args_inner_list = List.map string_of_exp el_inner in
-                                    debug_print
-                                      ("id_inner: " ^ string_of_id id_inner ^ "; Arg_inner: "
-                                     ^ String.concat ", " args_inner_list
-                                      );
-                                    args_list := args_inner_list
-                                | _ -> ()
-                              )
-                              el;
-                            ( string_of_id
-                                (List.hd (List.map (function E_aux (E_app (id_inner, _), _) -> id_inner | _ -> id) el)),
-                              !args_list
+                  List.iter
+                    (fun exp ->
+                      match exp with
+                      | E_aux (E_app (id, el), _) ->
+                          debug_print
+                            ("id: " ^ string_of_id id ^ "; Arg: " ^ String.concat ", " (List.map string_of_exp el));
+                          List.iter
+                            (fun inner_exp ->
+                              match inner_exp with
+                              | E_aux (E_app (id_inner, el_inner), _) ->
+                                  let args_inner_list = List.map string_of_exp el_inner in
+                                    List.mapi (fun index arg ->
+                                      debug_print ("args_inner_list[" ^ string_of_int index ^ "]: " ^ arg)
+                                    ) args_inner_list;
+                                  debug_print
+                                    ("Adding to hashtable with key: " ^ string_of_id i ^ ", id_inner: "
+                                    ^ string_of_id id_inner ^ ", args_inner: " ^ String.concat ", " args_inner_list
+                                    );
+
+                                  Hashtbl.add baseinstructions (string_of_id i) (string_of_id id_inner, args_inner_list)
+                              | _ -> ()
                             )
-                        | _ -> ("", [])
-                      )
-                      exp_list
-                  in
-                  Hashtbl.add pseudoinstructions (string_of_id i) base_instructions
+                            el
+                      | _ -> ()
+                    )
+                    exp_list
               | _ -> ()
             )
           | "execute" | "pseudo_execute" ->
@@ -738,13 +736,6 @@ let json_of_format k =
   in
   "\"" ^ format ^ "\""
 
-let json_of_base_instruction k =
-  match Hashtbl.find_opt baseinstructions k with
-  | None -> "" (* Return an empty string if the key doesn't exist *)
-  | Some base_instructions ->
-      (* Convert each instruction to a JSON-friendly string and concatenate them *)
-      String.concat ", " (List.map String.escaped base_instructions)
-
 let json_of_extensions k = match Hashtbl.find_opt extensions k with None -> "" | Some l -> String.concat "," l
 
 let json_of_instruction k v =
@@ -764,7 +755,7 @@ let json_of_pseudoinstruction k v =
   ^ json_of_name k (List.hd v)
   ^ ",\n" ^ "  \"operands\": [ " ^ json_of_operands k ^ " ],\n" ^ "  \"syntax\": " ^ "\"" ^ json_of_syntax k ^ "\",\n"
   ^ "  \"format\": " ^ json_of_format k ^ ",\n" ^ "  \"fields\": [ " ^ json_of_fields k ^ " ],\n" ^ "  \"function\": "
-  ^ json_of_base_instruction k ^ ",\n" ^ "  \"description\": " ^ json_of_description k ^ "\n" ^ "}"
+  ^ "  \"description\": " ^ json_of_description k ^ "\n" ^ "}"
 
 let rec parse_typ name t =
   match t with
@@ -783,6 +774,27 @@ let rec parse_typ name t =
         | _ -> debug_print "Typ_app other"
       end
   | _ -> debug_print "typ other"
+
+let get_index k input =
+  match Hashtbl.find_opt inputs k with
+  | Some inputl ->
+      let index = 
+        List.fold_left
+          (fun acc (index, item) ->
+            if item = input && acc = -1 then (
+              print_endline ("Found result '" ^ input ^ "' for id '" ^ k ^ "' at index: " ^ string_of_int index);
+              index
+            ) else acc
+          )
+          (-1 )
+          (List.mapi (fun i item -> (i, item)) inputl)
+      in
+      if index = -1 then print_endline "Result not found." else ();
+      index
+  | None ->
+      print_endline ("No input found for key: " ^ k);
+      -1
+
 
 let explode_mnemonic heads tails =
   List.concat
@@ -839,7 +851,7 @@ let defs { defs; _ } =
       | _ -> debug_print ~printer:prerr_string ""
     )
     defs;
-
+    
   debug_print "TYPES";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ v)) types;
   debug_print "SIGS";
@@ -854,6 +866,8 @@ let defs { defs; _ } =
     operands;
   debug_print "ENCODINGS";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) encodings;
+  debug_print "INPUTS";
+  Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) inputs;
   debug_print "ASSEMBLY";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) assembly;
   debug_print "EXECUTES";
@@ -868,7 +882,12 @@ let defs { defs; _ } =
     )
     pseudoinstructions;
   debug_print "BASEINSTRUCTIONS";
-  Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) baseinstructions;
+ Hashtbl.iter
+    (fun k (id_inner, args_inner_list) ->
+      debug_print (k ^ " : " ^ id_inner ^ " : " ^ Util.string_of_list ", " (fun x -> x) args_inner_list)
+    )
+    baseinstructions;
+    baseinstructions;
   debug_print "FUNCTIONS";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ v)) functions;
   debug_print "OP_FUNCTIONS";
@@ -893,6 +912,45 @@ let defs { defs; _ } =
 
   debug_print "ASSEMBLY_CLEAN";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) assembly_clean;
+
+  let process_base_instruction () =
+    Hashtbl.fold
+      (fun i (id_inner, args_inner_list) acc ->
+        match Hashtbl.find_opt assembly id_inner with
+        | Some assembly_str ->
+            (match String.split_on_char ',' (String.concat ", " assembly_str) with
+            | first :: _ ->
+                if Str.string_match (Str.regexp ".+(\\(.*\\))") first 0 then (
+                  debug_print ("Matched group: " ^ Str.matched_group 1 first);
+                  (id_inner, Str.matched_group 1 first, args_inner_list ) :: acc
+                ) else (
+                  debug_print ("Mnemonic: " ^ first);
+                  (id_inner, first, args_inner_list) :: acc 
+                )  
+            | [] -> acc)
+        | None -> acc
+      )
+      baseinstructions
+      []
+  in
+  let result = process_base_instruction () in
+  List.fold_left 
+    (fun acc (id_inner, res, args_inner_list) -> 
+      let index = get_index id_inner res in
+      if index <> -1 then 
+        match List.nth_opt args_inner_list index with
+        | Some arg ->
+            print_endline ("Found corresponding arg: " ^ arg);
+            arg :: acc  (* Add the found arg to the accumulator *)
+        | None ->
+            print_endline ("No corresponding arg found for index: " ^ string_of_int index);
+            acc  (* Return the accumulator unchanged if no argument found *)
+      else
+        (print_endline ("Index not found for result: " ^ res);
+         acc)  (* Return the accumulator unchanged if index not found *)
+    )
+    []  (* Initial accumulator is an empty list *)
+    result;
 
   print_endline "{";
   print_endline "  \"instructions\": [";
