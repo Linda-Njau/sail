@@ -431,8 +431,6 @@ let extract_source_code l =
   | Some (p1, p2) -> Reporting.loc_range_to_src p1 p2
   | None -> "Error - couldn't locate func"
 
-
-             
 let parse_funcl fcl =
   match fcl with
   | FCL_aux (FCL_funcl (Id_aux (Id id, _), Pat_aux (pat, _)), _) -> begin
@@ -453,22 +451,30 @@ let parse_funcl fcl =
                     (fun exp ->
                       match exp with
                       | E_aux (E_app (id, el), _) ->
-                          debug_print
-                            ("id: " ^ string_of_id id ^ "; Arg: " ^ String.concat ", " (List.map string_of_exp el));
                           List.iter
                             (fun inner_exp ->
                               match inner_exp with
                               | E_aux (E_app (id_inner, el_inner), _) ->
-                                  let args_inner_list = List.map string_of_exp el_inner in
-                                    List.mapi (fun index arg ->
-                                      debug_print ("args_inner_list[" ^ string_of_int index ^ "]: " ^ arg)
-                                    ) args_inner_list;
-                                  debug_print
-                                    ("Adding to hashtable with key: " ^ string_of_id i ^ ", id_inner: "
-                                    ^ string_of_id id_inner ^ ", args_inner: " ^ String.concat ", " args_inner_list
-                                    );
-
-                                  Hashtbl.add baseinstructions (string_of_id i) (string_of_id id_inner, args_inner_list)
+                                  List.iteri
+                                    (fun index inner_value ->
+                                      match inner_value with
+                                      | E_aux (E_tuple tuple_list, _) ->
+                                          List.iteri
+                                            (fun tuple_index tuple_value ->
+                                              debug_print
+                                                ("Tuple[" ^ string_of_int tuple_index ^ "]: "
+                                               ^ string_of_exp tuple_value
+                                                )
+                                            )
+                                            tuple_list;
+                                          let args_inner_list = List.map string_of_exp tuple_list in
+                                            debug_print
+                                              ("Adding to hashtable with key: " ^ string_of_id i ^ ", id_inner: "
+                                              ^ string_of_id id_inner);
+                                              Hashtbl.add baseinstructions (string_of_id i) (string_of_id id_inner, args_inner_list)
+                                      | _ -> ()
+                                    )
+                                    el_inner;
                               | _ -> ()
                             )
                             el
@@ -778,15 +784,16 @@ let rec parse_typ name t =
 let get_index k input =
   match Hashtbl.find_opt inputs k with
   | Some inputl ->
-      let index = 
+      let index =
         List.fold_left
           (fun acc (index, item) ->
             if item = input && acc = -1 then (
               print_endline ("Found result '" ^ input ^ "' for id '" ^ k ^ "' at index: " ^ string_of_int index);
               index
-            ) else acc
+            )
+            else acc
           )
-          (-1 )
+          (-1)
           (List.mapi (fun i item -> (i, item)) inputl)
       in
       if index = -1 then print_endline "Result not found." else ();
@@ -794,7 +801,6 @@ let get_index k input =
   | None ->
       print_endline ("No input found for key: " ^ k);
       -1
-
 
 let explode_mnemonic heads tails =
   List.concat
@@ -851,7 +857,7 @@ let defs { defs; _ } =
       | _ -> debug_print ~printer:prerr_string ""
     )
     defs;
-    
+
   debug_print "TYPES";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ v)) types;
   debug_print "SIGS";
@@ -882,12 +888,12 @@ let defs { defs; _ } =
     )
     pseudoinstructions;
   debug_print "BASEINSTRUCTIONS";
- Hashtbl.iter
+  Hashtbl.iter
     (fun k (id_inner, args_inner_list) ->
       debug_print (k ^ " : " ^ id_inner ^ " : " ^ Util.string_of_list ", " (fun x -> x) args_inner_list)
     )
     baseinstructions;
-    baseinstructions;
+  baseinstructions;
   debug_print "FUNCTIONS";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ v)) functions;
   debug_print "OP_FUNCTIONS";
@@ -917,39 +923,42 @@ let defs { defs; _ } =
     Hashtbl.fold
       (fun i (id_inner, args_inner_list) acc ->
         match Hashtbl.find_opt assembly id_inner with
-        | Some assembly_str ->
-            (match String.split_on_char ',' (String.concat ", " assembly_str) with
+        | Some assembly_str -> (
+            match String.split_on_char ',' (String.concat ", " assembly_str) with
             | first :: _ ->
                 if Str.string_match (Str.regexp ".+(\\(.*\\))") first 0 then (
                   debug_print ("Matched group: " ^ Str.matched_group 1 first);
-                  (id_inner, Str.matched_group 1 first, args_inner_list ) :: acc
-                ) else (
+                  (id_inner, Str.matched_group 1 first, args_inner_list) :: acc
+                )
+                else (
                   debug_print ("Mnemonic: " ^ first);
-                  (id_inner, first, args_inner_list) :: acc 
-                )  
-            | [] -> acc)
+                  (id_inner, first, args_inner_list) :: acc
+                )
+            | [] -> acc
+          )
         | None -> acc
       )
-      baseinstructions
-      []
+      baseinstructions []
   in
   let result = process_base_instruction () in
-  List.fold_left 
-    (fun acc (id_inner, res, args_inner_list) -> 
+  List.fold_left
+    (fun acc (id_inner, res, args_inner_list) ->
       let index = get_index id_inner res in
-      if index <> -1 then 
+      if index <> -1 then (
         match List.nth_opt args_inner_list index with
         | Some arg ->
-            print_endline ("Found corresponding arg: " ^ arg);
-            arg :: acc  (* Add the found arg to the accumulator *)
+            debug_print ("Found corresponding arg: " ^ arg);
+            arg :: acc
         | None ->
-            print_endline ("No corresponding arg found for index: " ^ string_of_int index);
-            acc  (* Return the accumulator unchanged if no argument found *)
-      else
-        (print_endline ("Index not found for result: " ^ res);
-         acc)  (* Return the accumulator unchanged if index not found *)
+            debug_print ("No corresponding arg found for index: " ^ string_of_int index);
+            acc
+      )
+      else (
+        debug_print ("Index not found for result: " ^ res);
+        acc
+      )
     )
-    []  (* Initial accumulator is an empty list *)
+    []
     result;
 
   print_endline "{";
