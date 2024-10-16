@@ -468,13 +468,15 @@ let parse_funcl fcl =
                                             )
                                             tuple_list;
                                           let args_inner_list = List.map string_of_exp tuple_list in
-                                            debug_print
-                                              ("Adding to hashtable with key: " ^ string_of_id i ^ ", id_inner: "
-                                              ^ string_of_id id_inner);
-                                              Hashtbl.add baseinstructions (string_of_id i) (string_of_id id_inner, args_inner_list)
+                                          debug_print
+                                            ("Adding to hashtable with key: " ^ string_of_id i ^ ", id_inner: "
+                                           ^ string_of_id id_inner
+                                            );
+                                          Hashtbl.add baseinstructions (string_of_id i)
+                                            (string_of_id id_inner, args_inner_list)
                                       | _ -> ()
                                     )
-                                    el_inner;
+                                    el_inner
                               | _ -> ()
                             )
                             el
@@ -919,6 +921,32 @@ let defs { defs; _ } =
   debug_print "ASSEMBLY_CLEAN";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) assembly_clean;
 
+  let mnemonic_for_arg arg id_inner =
+  let id_inner_key = String.lowercase_ascii id_inner ^ "_mnemonic" in
+  debug_print ("Looking up key: " ^ id_inner_key);
+
+  (* Use Hashtbl.iter to process all keys and their lists *)
+  Hashtbl.iter (fun k (left_list, right_list) ->
+    if k = id_inner_key then (
+      debug_print ("Found key: " ^ id_inner_key);
+      debug_print ("Left list: " ^ String.concat ", " left_list);
+      debug_print ("Right list: " ^ String.concat ", " right_list);
+
+      (* Process all elements in left_list and right_list *)
+      List.iter (fun left_elem ->
+        debug_print ("Processing left element: " ^ left_elem);
+        List.iter (fun right_elem ->
+          debug_print ("Comparing with right element: " ^ right_elem);
+          if left_elem = arg then (
+            debug_print ("Matched " ^ left_elem ^ " with mnemonic: " ^ right_elem)
+          )
+        ) right_list
+      ) left_list
+    )
+  ) mappings;
+  (* Return empty or appropriate value as needed *)
+  []
+  in
   let process_base_instruction () =
     Hashtbl.fold
       (fun i (id_inner, args_inner_list) acc ->
@@ -947,8 +975,8 @@ let defs { defs; _ } =
       if index <> -1 then (
         match List.nth_opt args_inner_list index with
         | Some arg ->
-            debug_print ("Found corresponding arg: " ^ arg);
-            arg :: acc
+            let updated_acc = mnemonic_for_arg arg id_inner in
+            updated_acc @ acc
         | None ->
             debug_print ("No corresponding arg found for index: " ^ string_of_int index);
             acc
@@ -958,8 +986,7 @@ let defs { defs; _ } =
         acc
       )
     )
-    []
-    result;
+    [] result;
 
   print_endline "{";
   print_endline "  \"instructions\": [";
