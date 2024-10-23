@@ -346,6 +346,9 @@ let parse_mapcl i mc =
             List.iter (fun s -> debug_print ("L: " ^ s)) sl;
             let sl = string_list_of_mpat mpr in
             List.iter (fun s -> debug_print ("R: " ^ s)) sl;
+            debug_print ("Adding to mappings: key = " ^ string_of_id i 
+            ^ ", left = [" ^ String.concat ", " (string_list_of_mpat mpl)
+            ^ "], right = [" ^ String.concat ", " (string_list_of_mpat mpr) ^ "]");
             Hashtbl.add mappings (string_of_id i) (string_list_of_mpat mpl, string_list_of_mpat mpr);
             let sl = string_list_of_mpat mpr in
             List.iter
@@ -783,6 +786,12 @@ let rec parse_typ name t =
       end
   | _ -> debug_print "typ other"
 
+let index_of elem lst =
+    let rec aux i = function
+      | [] -> raise Not_found
+      | x :: xs -> if x = elem then i else aux (i + 1) xs
+    in aux 0 lst
+
 let get_index k input =
   match Hashtbl.find_opt inputs k with
   | Some inputl ->
@@ -803,6 +812,47 @@ let get_index k input =
   | None ->
       print_endline ("No input found for key: " ^ k);
       -1
+let find_mnemonic arg id_inner =
+  Hashtbl.fold (fun k (l, r) res ->
+    if k = String.lowercase_ascii id_inner ^ "_mnemonic" then
+      match List.find_opt (fun elem -> elem = arg) l with
+      | Some matched_elem ->
+          let mnemonic = List.nth r (index_of matched_elem l) in
+          debug_print ("Matched " ^ matched_elem ^ " with mnemonic: " ^ mnemonic);
+          mnemonic
+      | None -> res
+    else res
+  ) mappings ""
+
+let process_instruction_entry id_inner =
+  match Hashtbl.find_opt assembly id_inner with
+  | Some assembly_str -> (
+      match String.split_on_char ',' (String.concat ", " assembly_str) with
+      | first :: _ ->
+          if Str.string_match (Str.regexp ".+(\\(.*\\))") first 0 then (
+            debug_print ("param: " ^ Str.matched_group 1 first);
+            Str.matched_group 1 first
+          )
+          else (
+            debug_print ("Mnemonic: " ^ first);
+            first
+          )
+      | [] -> ""
+    )
+  | None -> ""
+
+let process_result_entry (id_inner, res, args_inner_list) =
+  let index = get_index id_inner res in
+  if index <> -1 then (
+    match List.nth_opt args_inner_list index with
+    | Some arg -> 
+        let mnemonic = find_mnemonic arg id_inner in
+        if mnemonic <> "" then 
+          mnemonic
+        else ""
+    | None -> ""
+  )
+  else ""
 
 let explode_mnemonic heads tails =
   List.concat
@@ -920,73 +970,23 @@ let defs { defs; _ } =
 
   debug_print "ASSEMBLY_CLEAN";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) assembly_clean;
-
-  let mnemonic_for_arg arg id_inner =
-  let id_inner_key = String.lowercase_ascii id_inner ^ "_mnemonic" in
-  debug_print ("Looking up key: " ^ id_inner_key);
-
-  (* Use Hashtbl.iter to process all keys and their lists *)
-  Hashtbl.iter (fun k (left_list, right_list) ->
-    if k = id_inner_key then (
-      debug_print ("Found key: " ^ id_inner_key);
-      debug_print ("Left list: " ^ String.concat ", " left_list);
-      debug_print ("Right list: " ^ String.concat ", " right_list);
-
-      (* Process all elements in left_list and right_list *)
-      List.iter (fun left_elem ->
-        debug_print ("Processing left element: " ^ left_elem);
-        List.iter (fun right_elem ->
-          debug_print ("Comparing with right element: " ^ right_elem);
-          if left_elem = arg then (
-            debug_print ("Matched " ^ left_elem ^ " with mnemonic: " ^ right_elem)
-          )
-        ) right_list
-      ) left_list
-    )
-  ) mappings;
-  (* Return empty or appropriate value as needed *)
-  []
-  in
+  
   let process_base_instruction () =
-    Hashtbl.fold
-      (fun i (id_inner, args_inner_list) acc ->
-        match Hashtbl.find_opt assembly id_inner with
-        | Some assembly_str -> (
-            match String.split_on_char ',' (String.concat ", " assembly_str) with
-            | first :: _ ->
-                if Str.string_match (Str.regexp ".+(\\(.*\\))") first 0 then (
-                  debug_print ("Matched group: " ^ Str.matched_group 1 first);
-                  (id_inner, Str.matched_group 1 first, args_inner_list) :: acc
-                )
-                else (
-                  debug_print ("Mnemonic: " ^ first);
-                  (id_inner, first, args_inner_list) :: acc
-                )
-            | [] -> acc
-          )
-        | None -> acc
-      )
-      baseinstructions []
-  in
-  let result = process_base_instruction () in
-  List.fold_left
-    (fun acc (id_inner, res, args_inner_list) ->
-      let index = get_index id_inner res in
-      if index <> -1 then (
-        match List.nth_opt args_inner_list index with
-        | Some arg ->
-            let updated_acc = mnemonic_for_arg arg id_inner in
-            updated_acc @ acc
-        | None ->
-            debug_print ("No corresponding arg found for index: " ^ string_of_int index);
-            acc
-      )
-      else (
-        debug_print ("Index not found for result: " ^ res);
+    let result =
+      Hashtbl.fold (fun id_inner (id_inner, args_inner_list) acc ->
+        let param = process_instruction_entry id_inner in
+        if param <> "" then (
+          let mnemonic = process_result_entry (id_inner, param, args_inner_list) in
+          if mnemonic <> "" then
+            mnemonic :: acc
+          else acc
+        )
+        else
         acc
-      )
-    )
-    [] result;
+      ) baseinstructions []
+    in result
+  in
+  let _ = process_base_instruction () in
 
   print_endline "{";
   print_endline "  \"instructions\": [";
