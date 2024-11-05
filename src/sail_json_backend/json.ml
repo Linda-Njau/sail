@@ -446,7 +446,7 @@ let parse_funcl fcl =
           let source_code = extract_source_code (Ast_util.exp_loc e) in
           match id with
           | "pseudo_of" -> (
-              debug_print ("FCL funcl pseudoinstruction " ^ string_of_id i);
+              debug_print ("" ^ string_of_id i);
               match e with
               | E_aux (E_list exp_list, _) ->
                   debug_print ("Exp el: " ^ String.concat ", " (List.map string_of_exp exp_list));
@@ -824,35 +824,37 @@ let find_mnemonic arg id_inner =
     else res
   ) mappings ""
 
-let process_instruction_entry id_inner =
-  match Hashtbl.find_opt assembly id_inner with
-  | Some assembly_str -> (
-      match String.split_on_char ',' (String.concat ", " assembly_str) with
-      | first :: _ ->
-          if Str.string_match (Str.regexp ".+(\\(.*\\))") first 0 then (
-            debug_print ("param: " ^ Str.matched_group 1 first);
-            Str.matched_group 1 first
-          )
-          else (
-            debug_print ("Mnemonic: " ^ first);
-            first
-          )
-      | [] -> ""
-    )
-  | None -> ""
 
-let process_result_entry (id_inner, res, args_inner_list) =
-  let index = get_index id_inner res in
+let process_result_entry (id_inner, param, args_inner_list) =
+  let index = get_index id_inner param in
   if index <> -1 then (
     match List.nth_opt args_inner_list index with
     | Some arg -> 
         let mnemonic = find_mnemonic arg id_inner in
         if mnemonic <> "" then 
-          mnemonic
-        else ""
-    | None -> ""
+          Some mnemonic
+        else None
+    | None -> None
   )
-  else ""
+  else None
+
+let get_mnemonic id_inner args_inner_list =
+  match Hashtbl.find_opt assembly id_inner with
+  | Some assembly_str -> (
+      match String.split_on_char ',' (String.concat ", " assembly_str) with
+      | first :: _ ->
+          if Str.string_match (Str.regexp ".+(\\(.*\\))") first 0 then (
+            let param = Str.matched_group 1 first in
+            debug_print ("param: " ^ param);
+            process_result_entry (id_inner, param, args_inner_list)
+          )
+          else (
+            debug_print ("Mnemonic: " ^ first);
+            Some first
+          )
+      | [] -> None
+    )
+  | None -> None
 
 let explode_mnemonic heads tails =
   List.concat
@@ -973,20 +975,16 @@ let defs { defs; _ } =
   
   let process_base_instruction () =
     let result =
-      Hashtbl.fold (fun id_inner (id_inner, args_inner_list) acc ->
-        let param = process_instruction_entry id_inner in
-        if param <> "" then (
-          let mnemonic = process_result_entry (id_inner, param, args_inner_list) in
-          if mnemonic <> "" then
-            mnemonic :: acc
-          else acc
-        )
-        else
-        acc
+      Hashtbl.fold (fun k (id_inner, args_inner_list) acc ->
+        match get_mnemonic id_inner args_inner_list with
+        | Some mnemonic -> mnemonic :: acc
+        | None -> acc
       ) baseinstructions []
     in result
+
   in
-  let _ = process_base_instruction () in
+  let result = process_base_instruction () in
+  debug_print ("Result of process_base_instruction: " ^ Util.string_of_list ", " (fun x -> x) result);
 
   print_endline "{";
   print_endline "  \"instructions\": [";
