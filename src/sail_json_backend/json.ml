@@ -346,9 +346,13 @@ let parse_mapcl i mc =
             List.iter (fun s -> debug_print ("L: " ^ s)) sl;
             let sl = string_list_of_mpat mpr in
             List.iter (fun s -> debug_print ("R: " ^ s)) sl;
-            debug_print ("Adding to mappings: key = " ^ string_of_id i 
-            ^ ", left = [" ^ String.concat ", " (string_list_of_mpat mpl)
-            ^ "], right = [" ^ String.concat ", " (string_list_of_mpat mpr) ^ "]");
+            debug_print
+              ("Adding to mappings: key = " ^ string_of_id i ^ ", left = ["
+              ^ String.concat ", " (string_list_of_mpat mpl)
+              ^ "], right = ["
+              ^ String.concat ", " (string_list_of_mpat mpr)
+              ^ "]"
+              );
             Hashtbl.add mappings (string_of_id i) (string_list_of_mpat mpl, string_list_of_mpat mpr);
             let sl = string_list_of_mpat mpr in
             List.iter
@@ -496,6 +500,86 @@ let parse_funcl fcl =
       | _ -> ()
     end
   | _ -> debug_print "FCL_funcl other"
+
+let index_of elem lst =
+  let rec aux i = function [] -> raise Not_found | x :: xs -> if x = elem then i else aux (i + 1) xs in
+  aux 0 lst
+
+let get_index k input =
+  match Hashtbl.find_opt inputs k with
+  | Some inputl ->
+      let index =
+        List.fold_left
+          (fun acc (index, item) ->
+            if item = input && acc = -1 then (
+              print_endline ("Found result '" ^ input ^ "' for id '" ^ k ^ "' at index: " ^ string_of_int index);
+              index
+            )
+            else acc
+          )
+          (-1)
+          (List.mapi (fun i item -> (i, item)) inputl)
+      in
+      if index = -1 then print_endline "Result not found." else ();
+      index
+  | None ->
+      print_endline ("No input found for key: " ^ k);
+      -1
+let map_arg_to_mnemonic arg id_inner =
+  Hashtbl.fold
+    (fun k (l, r) res ->
+      if k = String.lowercase_ascii id_inner ^ "_mnemonic" then (
+        match List.find_opt (fun elem -> elem = arg) l with
+        | Some matched_elem ->
+            let mnemonic = List.nth r (index_of matched_elem l) in
+            debug_print ("Matched " ^ matched_elem ^ " with mnemonic: " ^ mnemonic);
+            Some mnemonic
+        | None -> res
+      )
+      else res
+    )
+    mappings None
+
+let map_param_to_arg (id, param, args_list) =
+  let index = get_index id param in
+  match index with -1 -> None | _ -> List.nth_opt args_list index
+
+let get_mnemonic id args_list =
+  match Hashtbl.find_opt assembly id with
+  | Some (str :: _) ->
+      if Str.string_match (Str.regexp ".+(\\(.*\\))") str 0 then (
+        let param = Str.matched_group 1 str in
+        debug_print ("param: " ^ param);
+        match map_param_to_arg (id, param, args_list) with Some arg -> map_arg_to_mnemonic arg id | None -> None
+      )
+      else (
+        match Hashtbl.find_opt assembly_clean id with
+        | Some (mnemonic :: _) when mnemonic = str ->
+            debug_print ("Mnemonic matched: " ^ str);
+            Some str
+        | Some _ -> None
+        | None -> None
+      )
+  | Some [] -> None
+  | None -> None
+
+let test_get_mnemonic () =
+  let id = "C_ZEXT_W" in
+  let args_list = [] in
+
+  if Hashtbl.mem assembly id then debug_print ("The test ID " ^ id ^ " exists in the assembly hashtable.")
+  else debug_print ("The test ID " ^ id ^ " does not exist");
+  match get_mnemonic id args_list with None -> debug_print "Test failed" | Some _ -> debug_print "Test passed"
+
+let process_base_instruction () =
+  let result =
+    Hashtbl.fold
+      (fun k (id_inner, args_inner_list) acc ->
+        match get_mnemonic id_inner args_inner_list with Some mnemonic -> mnemonic :: acc | None -> acc
+      )
+      baseinstructions []
+  in
+  result
 
 let json_of_key_operand key op t = "\n{\n" ^ "  \"name\": \"" ^ op ^ "\", \"type\": \"" ^ t ^ "\"\n" ^ "}"
 
@@ -786,76 +870,6 @@ let rec parse_typ name t =
       end
   | _ -> debug_print "typ other"
 
-let index_of elem lst =
-    let rec aux i = function
-      | [] -> raise Not_found
-      | x :: xs -> if x = elem then i else aux (i + 1) xs
-    in aux 0 lst
-
-let get_index k input =
-  match Hashtbl.find_opt inputs k with
-  | Some inputl ->
-      let index =
-        List.fold_left
-          (fun acc (index, item) ->
-            if item = input && acc = -1 then (
-              print_endline ("Found result '" ^ input ^ "' for id '" ^ k ^ "' at index: " ^ string_of_int index);
-              index
-            )
-            else acc
-          )
-          (-1)
-          (List.mapi (fun i item -> (i, item)) inputl)
-      in
-      if index = -1 then print_endline "Result not found." else ();
-      index
-  | None ->
-      print_endline ("No input found for key: " ^ k);
-      -1
-let find_mnemonic arg id_inner =
-  Hashtbl.fold (fun k (l, r) res ->
-    if k = String.lowercase_ascii id_inner ^ "_mnemonic" then
-      match List.find_opt (fun elem -> elem = arg) l with
-      | Some matched_elem ->
-          let mnemonic = List.nth r (index_of matched_elem l) in
-          debug_print ("Matched " ^ matched_elem ^ " with mnemonic: " ^ mnemonic);
-          mnemonic
-      | None -> res
-    else res
-  ) mappings ""
-
-
-let process_result_entry (id_inner, param, args_inner_list) =
-  let index = get_index id_inner param in
-  if index <> -1 then (
-    match List.nth_opt args_inner_list index with
-    | Some arg -> 
-        let mnemonic = find_mnemonic arg id_inner in
-        if mnemonic <> "" then 
-          Some mnemonic
-        else None
-    | None -> None
-  )
-  else None
-
-let get_mnemonic id_inner args_inner_list =
-  match Hashtbl.find_opt assembly id_inner with
-  | Some assembly_str -> (
-      match String.split_on_char ',' (String.concat ", " assembly_str) with
-      | first :: _ ->
-          if Str.string_match (Str.regexp ".+(\\(.*\\))") first 0 then (
-            let param = Str.matched_group 1 first in
-            debug_print ("param: " ^ param);
-            process_result_entry (id_inner, param, args_inner_list)
-          )
-          else (
-            debug_print ("Mnemonic: " ^ first);
-            Some first
-          )
-      | [] -> None
-    )
-  | None -> None
-
 let explode_mnemonic heads tails =
   List.concat
     (List.map
@@ -972,18 +986,9 @@ let defs { defs; _ } =
 
   debug_print "ASSEMBLY_CLEAN";
   Hashtbl.iter (fun k v -> debug_print (k ^ ":" ^ Util.string_of_list ", " (fun x -> x) v)) assembly_clean;
-  
-  let process_base_instruction () =
-    let result =
-      Hashtbl.fold (fun k (id_inner, args_inner_list) acc ->
-        match get_mnemonic id_inner args_inner_list with
-        | Some mnemonic -> mnemonic :: acc
-        | None -> acc
-      ) baseinstructions []
-    in result
 
-  in
   let result = process_base_instruction () in
+  let () = test_get_mnemonic () in
   debug_print ("Result of process_base_instruction: " ^ Util.string_of_list ", " (fun x -> x) result);
 
   print_endline "{";
