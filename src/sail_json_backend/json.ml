@@ -502,47 +502,25 @@ let parse_funcl fcl =
   | _ -> debug_print "FCL_funcl other"
 
 let index_of elem lst =
-  let rec aux i = function [] -> raise Not_found | x :: xs -> if x = elem then i else aux (i + 1) xs in
-  aux 0 lst
+  List.find_map (fun (i, x) -> if x = elem then Some i else None) (List.mapi (fun i x -> (i, x)) lst)
 
-let get_index k input =
-  match Hashtbl.find_opt inputs k with
-  | Some inputl ->
-      let index =
-        List.fold_left
-          (fun acc (index, item) ->
-            if item = input && acc = -1 then (
-              print_endline ("Found result '" ^ input ^ "' for id '" ^ k ^ "' at index: " ^ string_of_int index);
-              index
-            )
-            else acc
-          )
-          (-1)
-          (List.mapi (fun i item -> (i, item)) inputl)
-      in
-      if index = -1 then print_endline "Result not found." else ();
-      index
-  | None ->
-      print_endline ("No input found for key: " ^ k);
-      -1
-let map_arg_to_mnemonic arg id_inner =
-  Hashtbl.fold
-    (fun k (l, r) res ->
-      if k = String.lowercase_ascii id_inner ^ "_mnemonic" then (
-        match List.find_opt (fun elem -> elem = arg) l with
-        | Some matched_elem ->
-            let mnemonic = List.nth r (index_of matched_elem l) in
-            debug_print ("Matched " ^ matched_elem ^ " with mnemonic: " ^ mnemonic);
-            Some mnemonic
-        | None -> res
+let map_arg_to_mnemonic arg id =
+  List.find_map
+    (fun (enum, mnemonic) ->
+      if List.hd enum = arg then (
+        debug_print ("Matched " ^ List.hd enum ^ " with mnemonic: " ^ List.hd mnemonic);
+        Some (List.hd mnemonic)
       )
-      else res
+      else None
     )
-    mappings None
+    (Hashtbl.find_all mappings (String.lowercase_ascii (id ^ "_mnemonic")))
 
-let map_param_to_arg (id, param, args_list) =
-  let index = get_index id param in
-  match index with -1 -> None | _ -> List.nth_opt args_list index
+let map_param_to_arg id param args_list =
+  match Hashtbl.find_opt inputs id with
+  | Some inputl -> (
+      match index_of param inputl with Some index -> List.nth_opt args_list index | None -> None
+    )
+  | None -> None
 
 let get_mnemonic id args_list =
   match Hashtbl.find_opt assembly id with
@@ -550,7 +528,7 @@ let get_mnemonic id args_list =
       if Str.string_match (Str.regexp ".+(\\(.*\\))") str 0 then (
         let param = Str.matched_group 1 str in
         debug_print ("param: " ^ param);
-        match map_param_to_arg (id, param, args_list) with Some arg -> map_arg_to_mnemonic arg id | None -> None
+        match map_param_to_arg id param args_list with Some arg -> map_arg_to_mnemonic arg id | None -> None
       )
       else (
         match Hashtbl.find_opt assembly_clean id with
